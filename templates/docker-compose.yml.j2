@@ -91,7 +91,7 @@ services:
 {% endif %}
 
   evolution_api:
-    image: atendai/evolution-api:v2.3.2
+    image: atendai/evolution-api:latest
     container_name: evolution_api
     restart: always
     env_file:
@@ -128,4 +128,4 @@ services:
 {% endif %}
     labels:
       - "com.evolution.api=true"
-      - "com.evolution.version=2.3.2"
+      - "com.evolution.version=latest"
