@@ -17,6 +17,26 @@
     enable_nginx: true
 
   tasks:
+    - name: Check and sanitize passwords for special characters
+      set_fact:
+        # Remove problematic characters from passwords or use safe defaults
+        safe_postgres_password: "{{ vault_postgres_password | regex_replace('[$@#]', '') | default('Evolution2025PostgresSecure', true) }}"
+        safe_redis_password: "{{ vault_redis_password | regex_replace('[$@#]', '') | default('Evolution2025RedisSecure', true) }}"
+      when: vault_postgres_password is defined and vault_redis_password is defined
+
+    - name: Use safe passwords if originals have issues
+      set_fact:
+        vault_postgres_password: "{{ safe_postgres_password }}"
+        vault_redis_password: "{{ safe_redis_password }}"
+      when: safe_postgres_password is defined
+
+    - name: Display password status
+      debug:
+        msg:
+          - "PostgreSQL password sanitized: {{ 'Yes' if safe_postgres_password != vault_postgres_password else 'No' }}"
+          - "Redis password sanitized: {{ 'Yes' if safe_redis_password != vault_redis_password else 'No' }}"
+      when: safe_postgres_password is defined
+
     - name: Verify Docker is installed
       command: docker --version
       register: docker_check
@@ -65,9 +85,12 @@
         evolution_data_path: "{{ evolution_install_path }}/volumes/evolution_data"
         postgres_data_path: "{{ evolution_install_path }}/volumes/postgres_data"
         redis_data_path: "{{ evolution_install_path }}/volumes/redis_data"
-        # Override vault URIs with correct container names
-        vault_database_connection_uri: "postgresql://{{ postgres_user }}:{{ vault_postgres_password }}@evolution_postgres:5432/{{ postgres_db }}?schema=public"
-        vault_redis_uri: "redis://default:{{ vault_redis_password }}@evolution_redis:6379/{{ redis_db | default(0) }}"
+        # URL encode passwords to handle special characters
+        postgres_password_encoded: "{{ vault_postgres_password | urlencode }}"
+        redis_password_encoded: "{{ vault_redis_password | urlencode }}"
+        # Build connection URIs with encoded passwords
+        vault_database_connection_uri: "postgresql://{{ postgres_user }}:{{ vault_postgres_password | urlencode }}@evolution_postgres:5432/{{ postgres_db }}?schema=public"
+        vault_redis_uri: "redis://default:{{ vault_redis_password | urlencode }}@evolution_redis:6379/{{ redis_db | default(0) }}"
 
     - name: Generate docker-compose.yml
       template:
@@ -97,10 +120,24 @@
       shell: docker ps -a --format "table {{'{{'}}.Names{{'}}'}}" | grep -E "evolution_" || true
       register: existing_containers
 
-    - name: Stop existing Evolution containers if running
+    - name: Stop and clean existing Evolution containers if running
       shell: |
         cd {{ evolution_install_path }}
-        docker compose down --remove-orphans
+        docker compose down --remove-orphans --volumes || true
+        docker rm -f evolution_api evolution_postgres evolution_redis || true
+        docker volume rm evolution_evolution_data evolution_postgres_data evolution_redis_data || true
+      when: existing_containers.stdout != ""
+      ignore_errors: yes
+
+    - name: Clean up any problematic .env file
+      lineinfile:
+        path: "{{ evolution_install_path }}/.env"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        create: no
+      loop:
+        - { regexp: '^DATABASE_CONNECTION_URI=', line: 'DATABASE_CONNECTION_URI=postgresql://{{ postgres_user }}:{{ vault_postgres_password }}@evolution_postgres:5432/{{ postgres_db }}?schema=public' }
+        - { regexp: '^CACHE_REDIS_URI=', line: 'CACHE_REDIS_URI=redis://default:{{ vault_redis_password }}@evolution_redis:6379/0' }
       when: existing_containers.stdout != ""
       ignore_errors: yes
 
