@@ -5,11 +5,11 @@
 #
 # ATENÇÃO: Evite usar $ nas senhas ou escape com $$
 
-# PostgreSQL Credentials
-vault_postgres_password: "SuaSenhaPostgreSQL2025"
+# PostgreSQL Credentials (EVITE usar $, @, # na senha)
+vault_postgres_password: "Evolution2025"
 
-# Redis Password
-vault_redis_password: "SuaSenhaRedis2025"
+# Redis Password (EVITE usar $, @, # na senha)
+vault_redis_password: "Redis2025"
 
 # Evolution API Authentication
 vault_evolution_api_key: "SuaChaveAPIEvolution2025"
