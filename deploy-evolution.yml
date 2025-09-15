@@ -65,6 +65,9 @@
         evolution_data_path: "{{ evolution_install_path }}/volumes/evolution_data"
         postgres_data_path: "{{ evolution_install_path }}/volumes/postgres_data"
         redis_data_path: "{{ evolution_install_path }}/volumes/redis_data"
+        # Override vault URIs with correct container names
+        vault_database_connection_uri: "postgresql://{{ postgres_user }}:{{ vault_postgres_password }}@evolution_postgres:5432/{{ postgres_db }}?schema=public"
+        vault_redis_uri: "redis://default:{{ vault_redis_password }}@evolution_redis:6379/{{ redis_db | default(0) }}"
 
     - name: Generate docker-compose.yml
       template:
@@ -109,11 +112,18 @@
 
     - name: Wait for PostgreSQL to be healthy
       shell: |
-        docker exec evolution_postgres pg_isready -U {{ postgres_user }} -d {{ postgres_db }}
+        docker exec evolution_postgres pg_isready -U postgres
       register: postgres_health
       until: postgres_health.rc == 0
       retries: 30
       delay: 10
+
+    - name: Create Evolution database and user
+      shell: |
+        docker exec evolution_postgres psql -U postgres -c "CREATE USER {{ postgres_user }} WITH PASSWORD '{{ vault_postgres_password }}';" || true
+        docker exec evolution_postgres psql -U postgres -c "CREATE DATABASE {{ postgres_db }} OWNER {{ postgres_user }};" || true
+        docker exec evolution_postgres psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE {{ postgres_db }} TO {{ postgres_user }};" || true
+      register: db_setup
 
     - name: Wait for Redis to be healthy
       shell: |
@@ -122,6 +132,15 @@
       until: redis_health.stdout == "PONG"
       retries: 30
       delay: 5
+
+    - name: Restart Evolution API container to apply database connection
+      shell: |
+        docker restart evolution_api
+      register: restart_evolution
+
+    - name: Wait after restart for container to stabilize
+      pause:
+        seconds: 15
 
     - name: Wait for Evolution API to be healthy
       uri:

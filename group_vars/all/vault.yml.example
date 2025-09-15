@@ -1,0 +1,46 @@
+# IMPORTANTE: Este é um arquivo de EXEMPLO
+# 1. Copie este arquivo para vault.yml
+# 2. Substitua todas as senhas pelos valores desejados
+# 3. Criptografe com: ansible-vault encrypt group_vars/all/vault.yml
+#
+# ATENÇÃO: Evite usar $ nas senhas ou escape com $$
+
+# PostgreSQL Credentials
+vault_postgres_password: "SuaSenhaPostgreSQL2025"
+
+# Redis Password
+vault_redis_password: "SuaSenhaRedis2025"
+
+# Evolution API Authentication
+vault_evolution_api_key: "SuaChaveAPIEvolution2025"
+
+# JWT Secret for Evolution
+vault_jwt_secret: "SeuJWTSecretEvolution2025"
+
+# Database Connection URI (use esta estrutura exata, mudando apenas a senha)
+# IMPORTANTE: O host DEVE ser evolution_postgres (nome do container)
+vault_database_connection_uri: "postgresql://evolution:{{ vault_postgres_password }}@evolution_postgres:5432/evolution_db?schema=public"
+
+# Redis Connection URI (use esta estrutura exata, mudando apenas a senha)
+# IMPORTANTE: O host DEVE ser evolution_redis (nome do container)
+vault_redis_uri: "redis://default:{{ vault_redis_password }}@evolution_redis:6379/0"
+
+# Webhook Authentication (if needed)
+vault_webhook_secret: "SeuWebhookSecret2025"
+
+# RabbitMQ Credentials (if enabled)
+vault_rabbitmq_user: "evolution"
+vault_rabbitmq_password: "SuaSenhaRabbitMQ2025"
+
+# S3/MinIO Credentials (if enabled)
+vault_s3_access_key: "evolution_access_key"
+vault_s3_secret_key: "SuaSenhaS3Secret2025"
+
+# Chatwoot Token (if enabled)
+vault_chatwoot_token: "SeuTokenChatwoot2025"
+
+# OpenAI API Key (if enabled)
+vault_openai_api_key: "sk-proj-xxxxxxxxxxxxxxxxxxxxx"
+
+# Dify API Key (if enabled)
+vault_dify_api_key: "app-xxxxxxxxxxxxxxxxxxxxx"
