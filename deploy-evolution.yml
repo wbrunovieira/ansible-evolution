@@ -259,15 +259,20 @@
             path: "/etc/letsencrypt/live/{{ evolution_domain }}/cert.pem"
           register: cert_exists
 
-        - name: Obtain SSL certificate
+        - name: Kill any existing certbot process
           shell: |
-            certbot certonly --standalone \
+            pkill -f certbot || true
+            sleep 2
+          when: not cert_exists.stat.exists and dns_check.stdout != ""
+          ignore_errors: yes
+
+        - name: Obtain SSL certificate using nginx method
+          shell: |
+            certbot certonly --nginx \
               -d {{ evolution_domain }} \
               --non-interactive \
               --agree-tos \
-              --email {{ ssl_email }} \
-              --pre-hook "systemctl stop nginx" \
-              --post-hook "systemctl start nginx"
+              --email {{ ssl_email }}
           when: not cert_exists.stat.exists and dns_check.stdout != ""
 
         - name: Update Nginx configuration with SSL

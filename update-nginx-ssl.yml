@@ -31,13 +31,20 @@
         state: present
         update_cache: yes
 
-    - name: Generate Nginx configuration
+    - name: Check if SSL certificate exists
+      stat:
+        path: "/etc/letsencrypt/live/{{ evolution_domain }}/cert.pem"
+      register: cert_exists
+
+    - name: Generate Nginx configuration (HTTP only if no cert)
       template:
         src: nginx-evolution.conf.j2
         dest: /etc/nginx/sites-available/evolution
         owner: root
         group: root
         mode: '0644'
+      vars:
+        enable_ssl: "{{ cert_exists.stat.exists }}"
 
     - name: Enable Evolution site
       file:
@@ -49,8 +56,14 @@
       command: nginx -t
       register: nginx_test
 
+    - name: Reload Nginx (HTTP only)
+      systemd:
+        name: nginx
+        state: reloaded
+      when: nginx_test.rc == 0 and not cert_exists.stat.exists
+
     - name: Configure SSL with Let's Encrypt
-      when: enable_ssl
+      when: not cert_exists.stat.exists
       block:
         - name: Check DNS configuration
           shell: |
@@ -80,32 +93,29 @@
                 name: certbot
                 state: present
 
-        - name: Check if certificate exists
-          stat:
-            path: "/etc/letsencrypt/live/{{ evolution_domain }}/cert.pem"
-          register: cert_exists
 
-        - name: Stop Nginx temporarily for certificate generation
+        - name: Ensure Nginx is running for certbot
           systemd:
             name: nginx
-            state: stopped
-          when: not cert_exists.stat.exists and dns_check.stdout != ""
+            state: started
+          when: dns_check.stdout != ""
 
-        - name: Obtain SSL certificate
+        - name: Kill any existing certbot process
           shell: |
-            certbot certonly --standalone \
+            pkill -f certbot || true
+            sleep 2
+          when: dns_check.stdout != ""
+          ignore_errors: yes
+
+        - name: Obtain SSL certificate using nginx method
+          shell: |
+            certbot certonly --nginx \
               -d {{ evolution_domain }} \
               --non-interactive \
               --agree-tos \
               --email {{ ssl_email }}
-          when: not cert_exists.stat.exists and dns_check.stdout != ""
+          when: dns_check.stdout != ""
           register: certbot_result
-
-        - name: Start Nginx after certificate generation
-          systemd:
-            name: nginx
-            state: started
-          when: not cert_exists.stat.exists and dns_check.stdout != ""
 
         - name: Update Nginx configuration with SSL
           template:
@@ -114,7 +124,9 @@
             owner: root
             group: root
             mode: '0644'
-          when: cert_exists.stat.exists or (certbot_result is defined and certbot_result.rc == 0)
+          when: certbot_result is defined and certbot_result.rc == 0
+          vars:
+            enable_ssl: true
 
         - name: Setup automatic certificate renewal
           cron:
@@ -124,11 +136,16 @@
             day: "1"
             job: "certbot renew --quiet --post-hook 'systemctl reload nginx'"
 
+    - name: Final Nginx configuration test
+      command: nginx -t
+      register: final_nginx_test
+      ignore_errors: yes
+
     - name: Reload Nginx
       systemd:
         name: nginx
         state: reloaded
-      when: nginx_test.rc == 0
+      when: final_nginx_test.rc == 0
 
     - name: Test HTTPS access
       uri:
