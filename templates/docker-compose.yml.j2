@@ -1,0 +1,131 @@
+volumes:
+  evolution_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: {{ evolution_data_path }}
+
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: {{ postgres_data_path }}
+
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: {{ redis_data_path }}
+
+networks:
+  evolution_network:
+    driver: bridge
+
+services:
+  evolution_postgres:
+    image: postgres:{{ postgres_version }}
+    container_name: evolution_postgres
+    restart: always
+    environment:
+      - POSTGRES_USER={{ postgres_user }}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB={{ postgres_db }}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - {{ evolution_install_path }}/config/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - evolution_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U {{ postgres_user }} -d {{ postgres_db }}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+{% if postgres_memory_limit is defined %}
+    deploy:
+      resources:
+        limits:
+          memory: {{ postgres_memory_limit }}
+{% endif %}
+
+  evolution_redis:
+    image: redis:7-alpine
+    container_name: evolution_redis
+    restart: always
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "{{ redis_port }}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - evolution_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+{% if redis_memory_limit is defined %}
+    deploy:
+      resources:
+        limits:
+          memory: {{ redis_memory_limit }}
+{% endif %}
+
+  evolution_api:
+    image: atendai/evolution-api:v2.3.2
+    container_name: evolution_api
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "{{ evolution_port }}:8080"
+    volumes:
+      - evolution_data:/evolution/instances
+      - {{ evolution_install_path }}/config:/evolution/config:ro
+      - {{ evolution_install_path }}/logs:/evolution/logs
+    networks:
+      - evolution_network
+    depends_on:
+      evolution_postgres:
+        condition: service_healthy
+      evolution_redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+{% if evolution_memory_limit is defined %}
+    deploy:
+      resources:
+        limits:
+          memory: {{ evolution_memory_limit }}
+{% endif %}
+    labels:
+      - "com.evolution.api=true"
+      - "com.evolution.version=2.3.2"

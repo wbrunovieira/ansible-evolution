@@ -1,0 +1,106 @@
+---
+- name: Uninstall Evolution API completely
+  hosts: evolution_server
+  become: yes
+  gather_facts: yes
+
+  vars:
+    evolution_install_path: "/root/evolution"
+    evolution_domain: "evolution.wbdigitalsolutions.com"
+
+  tasks:
+    - name: Confirm uninstallation
+      pause:
+        prompt: "⚠️  This will COMPLETELY REMOVE Evolution API. Press Enter to continue or Ctrl+C to abort"
+
+    - name: Stop and remove Evolution containers
+      shell: |
+        cd {{ evolution_install_path }} || true
+        docker compose down -v || true
+      ignore_errors: yes
+
+    - name: Remove Evolution containers individually
+      docker_container:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - evolution_api
+        - evolution_postgres
+        - evolution_redis
+      ignore_errors: yes
+
+    - name: Remove Evolution Docker volumes
+      docker_volume:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - evolution_evolution_data
+        - evolution_postgres_data
+        - evolution_redis_data
+      ignore_errors: yes
+
+    - name: Remove Evolution Docker network
+      docker_network:
+        name: evolution_network
+        state: absent
+      ignore_errors: yes
+
+    - name: Remove Nginx configuration
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/nginx/sites-enabled/evolution
+        - /etc/nginx/sites-available/evolution
+      ignore_errors: yes
+
+    - name: Reload Nginx
+      systemd:
+        name: nginx
+        state: reloaded
+      ignore_errors: yes
+
+    - name: Remove cron jobs
+      cron:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - "Evolution API daily backup"
+        - "Evolution API health check"
+
+    - name: Create backup of data before deletion
+      shell: |
+        if [ -d "{{ evolution_install_path }}" ]; then
+          tar -czf /root/evolution_final_backup_$(date +%Y%m%d_%H%M%S).tar.gz \
+            -C /root evolution/
+        fi
+      ignore_errors: yes
+
+    - name: Remove Evolution installation directory
+      file:
+        path: "{{ evolution_install_path }}"
+        state: absent
+
+    - name: Clean Docker system (optional)
+      shell: |
+        docker system prune -f
+        docker volume prune -f
+      ignore_errors: yes
+
+    - name: Display uninstallation summary
+      debug:
+        msg:
+          - "==============================================="
+          - "✅ Evolution API has been uninstalled"
+          - "==============================================="
+          - "Removed:"
+          - "  - All Evolution containers"
+          - "  - All Evolution volumes"
+          - "  - Installation directory: {{ evolution_install_path }}"
+          - "  - Nginx configuration"
+          - "  - Cron jobs"
+          - "==============================================="
+          - "Backup saved at: /root/evolution_final_backup_*.tar.gz"
+          - "==============================================="
+          - "Note: SSL certificates were kept in /etc/letsencrypt"
+          - "==============================================="

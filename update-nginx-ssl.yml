@@ -1,0 +1,159 @@
+---
+- name: Update Nginx and SSL configuration for Evolution API
+  hosts: evolution_server
+  become: yes
+  gather_facts: yes
+
+  vars:
+    evolution_install_path: "/root/evolution"
+    evolution_port: 8080
+    evolution_domain: "evolution.wbdigitalsolutions.com"
+    ssl_email: "bruno@wbdigitalsolutions.com"
+    enable_ssl: true
+    evolution_cors_enabled: true
+
+  tasks:
+    - name: Verify Evolution API is running
+      uri:
+        url: "http://localhost:{{ evolution_port }}/healthcheck"
+        method: GET
+        status_code: 200
+      register: evolution_check
+      failed_when: false
+
+    - name: Display Evolution API status
+      debug:
+        msg: "Evolution API status: {{ 'Running' if evolution_check.status == 200 else 'Not running' }}"
+
+    - name: Install Nginx if not present
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    - name: Generate Nginx configuration
+      template:
+        src: nginx-evolution.conf.j2
+        dest: /etc/nginx/sites-available/evolution
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Enable Evolution site
+      file:
+        src: /etc/nginx/sites-available/evolution
+        dest: /etc/nginx/sites-enabled/evolution
+        state: link
+
+    - name: Test Nginx configuration
+      command: nginx -t
+      register: nginx_test
+
+    - name: Configure SSL with Let's Encrypt
+      when: enable_ssl
+      block:
+        - name: Check DNS configuration
+          shell: |
+            nslookup {{ evolution_domain }} 8.8.8.8 | grep -A1 "Name:" | grep "Address:" | grep -v "#" | awk '{print $2}'
+          register: dns_check
+          changed_when: false
+          failed_when: false
+
+        - name: Display DNS status
+          debug:
+            msg: "DNS A record for {{ evolution_domain }} points to: {{ dns_check.stdout | default('NOT FOUND') }}"
+
+        - name: Install Certbot
+          block:
+            - name: Install snapd
+              apt:
+                name: snapd
+                state: present
+
+            - name: Install certbot snap
+              snap:
+                name: certbot
+                classic: yes
+          rescue:
+            - name: Install Certbot via apt as fallback
+              apt:
+                name: certbot
+                state: present
+
+        - name: Check if certificate exists
+          stat:
+            path: "/etc/letsencrypt/live/{{ evolution_domain }}/cert.pem"
+          register: cert_exists
+
+        - name: Stop Nginx temporarily for certificate generation
+          systemd:
+            name: nginx
+            state: stopped
+          when: not cert_exists.stat.exists and dns_check.stdout != ""
+
+        - name: Obtain SSL certificate
+          shell: |
+            certbot certonly --standalone \
+              -d {{ evolution_domain }} \
+              --non-interactive \
+              --agree-tos \
+              --email {{ ssl_email }}
+          when: not cert_exists.stat.exists and dns_check.stdout != ""
+          register: certbot_result
+
+        - name: Start Nginx after certificate generation
+          systemd:
+            name: nginx
+            state: started
+          when: not cert_exists.stat.exists and dns_check.stdout != ""
+
+        - name: Update Nginx configuration with SSL
+          template:
+            src: nginx-evolution.conf.j2
+            dest: /etc/nginx/sites-available/evolution
+            owner: root
+            group: root
+            mode: '0644'
+          when: cert_exists.stat.exists or (certbot_result is defined and certbot_result.rc == 0)
+
+        - name: Setup automatic certificate renewal
+          cron:
+            name: "Renew Evolution API Let's Encrypt certificate"
+            minute: "0"
+            hour: "2"
+            day: "1"
+            job: "certbot renew --quiet --post-hook 'systemctl reload nginx'"
+
+    - name: Reload Nginx
+      systemd:
+        name: nginx
+        state: reloaded
+      when: nginx_test.rc == 0
+
+    - name: Test HTTPS access
+      uri:
+        url: "https://{{ evolution_domain }}/healthcheck"
+        method: GET
+        status_code: 200
+        validate_certs: yes
+      register: https_test
+      when: enable_ssl
+      failed_when: false
+      retries: 3
+      delay: 5
+
+    - name: Display configuration summary
+      debug:
+        msg:
+          - "==============================================="
+          - "✅ Nginx/SSL configuration updated!"
+          - "==============================================="
+          - "Domain: {{ evolution_domain }}"
+          - "SSL Enabled: {{ enable_ssl }}"
+          - "Certificate exists: {{ cert_exists.stat.exists | default(false) }}"
+          - "HTTPS test: {{ 'Success' if https_test.status == 200 else 'Failed or pending' }}"
+          - "==============================================="
+          - "Access URLs:"
+          - "  - HTTPS: https://{{ evolution_domain }}"
+          - "  - HTTP: http://{{ evolution_domain }} (redirects to HTTPS)"
+          - "==============================================="

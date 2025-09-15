@@ -1,0 +1,312 @@
+---
+- name: Deploy Evolution API on existing Docker environment
+  hosts: evolution_server
+  become: yes
+  gather_facts: yes
+
+  vars:
+    evolution_install_path: "/root/evolution"
+    evolution_port: 8080
+    postgres_version: "16"
+    postgres_db: "evolution_db"
+    postgres_user: "evolution"
+    redis_port: 6381
+    evolution_domain: "evolution.wbdigitalsolutions.com"
+    ssl_email: "bruno@wbdigitalsolutions.com"
+    enable_ssl: true
+    enable_nginx: true
+
+  tasks:
+    - name: Verify Docker is installed
+      command: docker --version
+      register: docker_check
+      failed_when: docker_check.rc != 0
+
+    - name: Verify Docker Compose is available
+      command: docker compose version
+      register: compose_check
+      failed_when: compose_check.rc != 0
+
+    - name: Display Docker versions
+      debug:
+        msg:
+          - "Docker: {{ docker_check.stdout }}"
+          - "Docker Compose: {{ compose_check.stdout }}"
+
+    - name: Create Evolution directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      loop:
+        - "{{ evolution_install_path }}"
+        - "{{ evolution_install_path }}/volumes/evolution_data"
+        - "{{ evolution_install_path }}/volumes/postgres_data"
+        - "{{ evolution_install_path }}/volumes/redis_data"
+        - "{{ evolution_install_path }}/backups"
+        - "{{ evolution_install_path }}/config"
+        - "{{ evolution_install_path }}/logs"
+
+    - name: Check if Evolution was previously installed
+      stat:
+        path: "{{ evolution_install_path }}/volumes/evolution_data/.evolution"
+      register: previous_install
+
+    - name: Clean old Evolution config if exists
+      file:
+        path: "{{ evolution_install_path }}/volumes/evolution_data/.evolution"
+        state: absent
+      when: previous_install.stat.exists
+
+    - name: Set variables for templates
+      set_fact:
+        evolution_data_path: "{{ evolution_install_path }}/volumes/evolution_data"
+        postgres_data_path: "{{ evolution_install_path }}/volumes/postgres_data"
+        redis_data_path: "{{ evolution_install_path }}/volumes/redis_data"
+
+    - name: Generate docker-compose.yml
+      template:
+        src: docker-compose.yml.j2
+        dest: "{{ evolution_install_path }}/docker-compose.yml"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Generate .env file
+      template:
+        src: env.j2
+        dest: "{{ evolution_install_path }}/.env"
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Generate PostgreSQL init script
+      template:
+        src: init-db.sql.j2
+        dest: "{{ evolution_install_path }}/config/init-db.sql"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Check if containers are already running
+      shell: docker ps -a --format "table {{'{{'}}.Names{{'}}'}}" | grep -E "evolution_" || true
+      register: existing_containers
+
+    - name: Stop existing Evolution containers if running
+      shell: |
+        cd {{ evolution_install_path }}
+        docker compose down --remove-orphans
+      when: existing_containers.stdout != ""
+      ignore_errors: yes
+
+    - name: Start Evolution API services
+      shell: |
+        cd {{ evolution_install_path }}
+        docker compose up -d
+      register: docker_up
+
+    - name: Wait for PostgreSQL to be healthy
+      shell: |
+        docker exec evolution_postgres pg_isready -U {{ postgres_user }} -d {{ postgres_db }}
+      register: postgres_health
+      until: postgres_health.rc == 0
+      retries: 30
+      delay: 10
+
+    - name: Wait for Redis to be healthy
+      shell: |
+        docker exec evolution_redis redis-cli -a "{{ vault_redis_password }}" ping
+      register: redis_health
+      until: redis_health.stdout == "PONG"
+      retries: 30
+      delay: 5
+
+    - name: Wait for Evolution API to be healthy
+      uri:
+        url: "http://localhost:{{ evolution_port }}/healthcheck"
+        method: GET
+        status_code: 200
+      register: evolution_health
+      until: evolution_health.status == 200
+      retries: 30
+      delay: 10
+
+    - name: Configure Nginx for Evolution API
+      when: enable_nginx
+      block:
+        - name: Install Nginx if not present
+          apt:
+            name: nginx
+            state: present
+            update_cache: yes
+
+        - name: Generate Nginx configuration
+          template:
+            src: nginx-evolution.conf.j2
+            dest: /etc/nginx/sites-available/evolution
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Enable Evolution site
+          file:
+            src: /etc/nginx/sites-available/evolution
+            dest: /etc/nginx/sites-enabled/evolution
+            state: link
+
+        - name: Test Nginx configuration
+          command: nginx -t
+          register: nginx_test
+
+        - name: Reload Nginx
+          systemd:
+            name: nginx
+            state: reloaded
+          when: nginx_test.rc == 0
+
+    - name: Configure SSL with Let's Encrypt
+      when: enable_ssl and enable_nginx
+      block:
+        - name: Check if DNS is properly configured
+          shell: |
+            nslookup {{ evolution_domain }} 8.8.8.8 | grep -A1 "Name:" | grep "Address:" | grep -v "#" | awk '{print $2}'
+          register: dns_check
+          changed_when: false
+          failed_when: false
+
+        - name: Display DNS status
+          debug:
+            msg: "DNS A record for {{ evolution_domain }} points to: {{ dns_check.stdout | default('NOT FOUND') }}"
+
+        - name: Install Certbot via snap
+          block:
+            - name: Install snapd
+              apt:
+                name: snapd
+                state: present
+
+            - name: Install certbot snap
+              snap:
+                name: certbot
+                classic: yes
+          rescue:
+            - name: Install Certbot via apt as fallback
+              apt:
+                name: certbot
+                state: present
+              ignore_errors: yes
+
+        - name: Check if certificate already exists
+          stat:
+            path: "/etc/letsencrypt/live/{{ evolution_domain }}/cert.pem"
+          register: cert_exists
+
+        - name: Obtain SSL certificate
+          shell: |
+            certbot certonly --standalone \
+              -d {{ evolution_domain }} \
+              --non-interactive \
+              --agree-tos \
+              --email {{ ssl_email }} \
+              --pre-hook "systemctl stop nginx" \
+              --post-hook "systemctl start nginx"
+          when: not cert_exists.stat.exists and dns_check.stdout != ""
+
+        - name: Update Nginx configuration with SSL
+          template:
+            src: nginx-evolution.conf.j2
+            dest: /etc/nginx/sites-available/evolution
+            owner: root
+            group: root
+            mode: '0644'
+          when: cert_exists.stat.exists or dns_check.stdout != ""
+
+        - name: Reload Nginx with SSL
+          systemd:
+            name: nginx
+            state: reloaded
+
+        - name: Setup automatic certificate renewal
+          cron:
+            name: "Renew Let's Encrypt certificates"
+            minute: "0"
+            hour: "2"
+            day: "1"
+            job: "certbot renew --quiet --post-hook 'systemctl reload nginx'"
+
+    - name: Setup backup script
+      when: enable_backup | default(true)
+      block:
+        - name: Generate backup script
+          template:
+            src: backup-evolution.sh.j2
+            dest: "{{ evolution_install_path }}/backup-evolution.sh"
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Setup backup cron job
+          cron:
+            name: "Evolution API daily backup"
+            minute: "0"
+            hour: "3"
+            job: "{{ evolution_install_path }}/backup-evolution.sh >> {{ evolution_install_path }}/logs/backup.log 2>&1"
+
+    - name: Setup monitoring script
+      when: enable_monitoring | default(true)
+      block:
+        - name: Generate monitoring script
+          template:
+            src: monitor-evolution.sh.j2
+            dest: "{{ evolution_install_path }}/monitor-evolution.sh"
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Setup monitoring cron job
+          cron:
+            name: "Evolution API health check"
+            minute: "*/5"
+            job: "{{ evolution_install_path }}/monitor-evolution.sh >> {{ evolution_install_path }}/logs/monitor.log 2>&1"
+
+    - name: Generate installation information file
+      template:
+        src: installation-info.txt.j2
+        dest: "{{ evolution_install_path }}/INSTALLATION_INFO.txt"
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Display installation summary
+      debug:
+        msg:
+          - "==============================================="
+          - "✅ Evolution API deployed successfully!"
+          - "==============================================="
+          - "Access URL: {{ evolution_protocol }}://{{ evolution_domain }}"
+          - "Local URL: http://localhost:{{ evolution_port }}"
+          - "API Key: {{ vault_evolution_api_key }}"
+          - "Documentation: {{ evolution_protocol }}://{{ evolution_domain }}/docs"
+          - "==============================================="
+          - "Containers:"
+          - "  - evolution_api (port {{ evolution_port }})"
+          - "  - evolution_postgres (internal)"
+          - "  - evolution_redis (port {{ redis_port }})"
+          - "==============================================="
+          - "Files location: {{ evolution_install_path }}"
+          - "Installation info: {{ evolution_install_path }}/INSTALLATION_INFO.txt"
+          - "==============================================="
+
+    - name: Verify deployment
+      uri:
+        url: "http://localhost:{{ evolution_port }}/healthcheck"
+        method: GET
+        headers:
+          apikey: "{{ vault_evolution_api_key }}"
+      register: final_check
+
+    - name: Display health check result
+      debug:
+        msg: "Health check response: {{ final_check.json | default(final_check.content) }}"

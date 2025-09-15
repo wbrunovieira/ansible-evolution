@@ -1,0 +1,112 @@
+# Ansible Vault and sensitive files
+group_vars/all/vault.yml
+group_vars/all/*.vault
+*.vault
+vault_pass.txt
+.vault_pass
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# SSH Keys
+*.pem
+*.key
+*.pub
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+.ssh/
+
+# Ansible
+*.retry
+ansible.log
+/tmp/
+.ansible/
+ansible_facts/
+
+# Backup files
+*.backup
+*.bak
+*.old
+*.orig
+*~
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+.project
+.settings/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Certificates (if any local testing)
+*.crt
+*.cer
+*.pfx
+*.p12
+
+# Local configuration overrides
+local_vars.yml
+local_config.yml
+inventory/local/
+inventory/production/
+
+# Terraform (if used)
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Documentation build
+docs/_build/
+site/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# Package files
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# Custom ignore
+INSTALLATION_INFO.txt
+installation_info.txt
+credentials.txt
+passwords.txt
+secrets.yml
+*_unencrypted.yml

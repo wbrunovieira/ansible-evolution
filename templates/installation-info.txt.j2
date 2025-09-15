@@ -1,0 +1,167 @@
+================================================================================
+                    EVOLUTION API - INSTALLATION INFORMATION
+================================================================================
+
+Installation Date: {{ ansible_date_time.iso8601 }}
+Server: {{ ansible_hostname }}
+IP Address: {{ ansible_default_ipv4.address }}
+
+================================================================================
+                              ACCESS INFORMATION
+================================================================================
+
+Evolution API URL: {{ evolution_protocol }}://{{ evolution_domain }}
+Local Access: http://localhost:{{ evolution_port }}
+
+API Documentation: {{ evolution_protocol }}://{{ evolution_domain }}/docs
+Health Check: {{ evolution_protocol }}://{{ evolution_domain }}/healthcheck
+
+================================================================================
+                              AUTHENTICATION
+================================================================================
+
+API Key: {{ vault_evolution_api_key }}
+
+Use this API key in the header of your requests:
+Header Name: apikey
+Header Value: {{ vault_evolution_api_key }}
+
+Example curl:
+curl -X GET "{{ evolution_protocol }}://{{ evolution_domain }}/instance/fetchInstances" \
+     -H "apikey: {{ vault_evolution_api_key }}"
+
+================================================================================
+                              DOCKER CONTAINERS
+================================================================================
+
+Containers:
+- evolution_api     (Port: {{ evolution_port }})
+- evolution_postgres (Internal)
+- evolution_redis    (Port: {{ redis_port }})
+
+Commands:
+- View logs: docker logs -f evolution_api
+- Restart: docker compose -f {{ evolution_install_path }}/docker-compose.yml restart
+- Stop: docker compose -f {{ evolution_install_path }}/docker-compose.yml down
+- Start: docker compose -f {{ evolution_install_path }}/docker-compose.yml up -d
+
+================================================================================
+                              DATABASE INFORMATION
+================================================================================
+
+PostgreSQL:
+- Host: evolution_postgres
+- Port: 5432
+- Database: {{ postgres_db }}
+- User: {{ postgres_user }}
+- Password: [ENCRYPTED IN VAULT]
+
+Redis:
+- Host: evolution_redis
+- Port: {{ redis_port }}
+- Password: [ENCRYPTED IN VAULT]
+
+================================================================================
+                              FILE LOCATIONS
+================================================================================
+
+Installation Path: {{ evolution_install_path }}
+Data Volume: {{ evolution_install_path }}/volumes/evolution_data
+PostgreSQL Data: {{ evolution_install_path }}/volumes/postgres_data
+Redis Data: {{ evolution_install_path }}/volumes/redis_data
+Backups: {{ evolution_install_path }}/backups
+Logs: {{ evolution_install_path }}/logs
+Configuration: {{ evolution_install_path }}/config
+
+================================================================================
+                              BACKUP & MONITORING
+================================================================================
+
+{% if enable_backup %}
+Backup Script: {{ evolution_install_path }}/backup-evolution.sh
+Backup Schedule: Daily at 3:00 AM
+Retention: {{ backup_retention_days }} days
+{% endif %}
+
+{% if enable_monitoring %}
+Monitor Script: {{ evolution_install_path }}/monitor-evolution.sh
+Monitor Schedule: Every 5 minutes
+{% endif %}
+
+================================================================================
+                              INTEGRATION WITH N8N
+================================================================================
+
+N8N is running on the same server at http://localhost:5678
+
+To integrate Evolution API with n8n:
+
+1. In n8n, create a new HTTP Request node
+2. Set the URL to: http://evolution_api:8080/[endpoint]
+3. Add Header:
+   - Name: apikey
+   - Value: {{ vault_evolution_api_key }}
+4. Use the internal Docker network for better performance
+
+Example n8n webhook for Evolution:
+http://n8n:5678/webhook/evolution-messages
+
+================================================================================
+                              USEFUL COMMANDS
+================================================================================
+
+# Check API status
+curl -s http://localhost:{{ evolution_port }}/healthcheck | jq .
+
+# List all instances
+curl -H "apikey: {{ vault_evolution_api_key }}" \
+     http://localhost:{{ evolution_port }}/instance/fetchInstances | jq .
+
+# Create a new instance
+curl -X POST http://localhost:{{ evolution_port }}/instance/create \
+     -H "apikey: {{ vault_evolution_api_key }}" \
+     -H "Content-Type: application/json" \
+     -d '{"instanceName": "my-whatsapp", "qrcode": true}'
+
+# View container stats
+docker stats evolution_api evolution_postgres evolution_redis
+
+# Backup now
+{{ evolution_install_path }}/backup-evolution.sh
+
+================================================================================
+                              TROUBLESHOOTING
+================================================================================
+
+If Evolution API is not accessible:
+1. Check container status: docker ps | grep evolution
+2. View logs: docker logs evolution_api --tail 50
+3. Test locally: curl http://localhost:{{ evolution_port }}/healthcheck
+4. Check Nginx: systemctl status nginx
+5. Verify DNS: nslookup {{ evolution_domain }}
+
+For database issues:
+docker exec -it evolution_postgres psql -U {{ postgres_user }} -d {{ postgres_db }}
+
+For Redis issues:
+docker exec -it evolution_redis redis-cli -a [password]
+
+================================================================================
+                              SECURITY NOTES
+================================================================================
+
+⚠️  IMPORTANT:
+- Keep your API key secure and never share it publicly
+- Regularly update Evolution API to the latest version
+- Monitor logs for suspicious activity
+- Use HTTPS in production (currently {% if enable_ssl %}enabled{% else %}disabled{% endif %})
+- Implement rate limiting if exposed to the internet
+
+================================================================================
+
+For more information:
+- Documentation: https://doc.evolution-api.com
+- GitHub: https://github.com/EvolutionAPI/evolution-api
+- Support: https://evolution-api.com/support
+
+================================================================================
